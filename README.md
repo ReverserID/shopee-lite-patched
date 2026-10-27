@@ -24,7 +24,7 @@ Both are single merged APKs — no split APKs / feature-delivery needed, so the 
 
 1. Uninstall the existing app (different signature).
 2. Install the APK (allow "install from unknown sources").
-3. Launch — the floating ball opens the mod menu.
+3. Launch — the floating ball opens the mod menu. If the ball does not appear, grant **Display over other apps** (overlay) permission to the app, then relaunch — on a fresh install the system silently denies the overlay request.
 
 ## Notes
 
