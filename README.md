@@ -20,6 +20,17 @@ Both are single merged APKs — no split APKs / feature-delivery needed, so the 
   - device fingerprint rotation (root)
 - **No root required** — the patches are embedded via [LSPatch](https://github.com/LSPosed/LSPatch). Root only unlocks the extra features marked above.
 
+## Emulator (LDPlayer, MuMu, dst)
+
+APK single-file di atas **crash di emulator** - proteksi runtime Shopee
+bereaksi buruk saat APK di-repack jadi satu file. Pakai paket split khusus
+emulator: [`shopee-3.83.36-emulator.zip`](https://github.com/ReverserID/shopee-lite-patched/releases/download/v3.83.36/shopee-3.83.36-emulator.zip)
+
+Isinya 3 APK dengan signature sama - install pakai
+`adb install-multiple base-487-lspatched.apk split_config.arm64_v8a.apk split_config.xhdpi.apk`
+atau SAI. Detail di `README.txt` dalam zip. Shopee Lite tetap tidak jalan di
+emulator (proteksinya mematikan process-nya) - paket ini untuk app utama saja.
+
 ## Install
 
 1. Uninstall the existing app (different signature).
