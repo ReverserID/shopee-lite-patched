@@ -31,6 +31,20 @@ Isinya 3 APK dengan signature sama - install pakai
 atau SAI. Detail di `README.txt` dalam zip. Shopee Lite tetap tidak jalan di
 emulator (proteksinya mematikan process-nya) - paket ini untuk app utama saja.
 
+## Login Google (root + LSPosed)
+
+Karena APK di-sign ulang, tombol **Login with Google** ditolak Google Play
+services (SHA-1 cert beda dari yang terdaftar). Fix-nya module Xposed:
+[`modules/shopee-gmsfix-1.0.0.apk`](https://github.com/ReverserID/shopee-lite-patched/raw/main/modules/shopee-gmsfix-1.0.0.apk)
+
+1. Install APK-nya, aktifkan di LSPosed, kasih scope **com.google.android.gms**
+2. Reboot
+3. Login Google jalan normal lagi
+
+Module nge-spoof signature asli Shopee (Garena) di dalam proses Play services.
+Tanpa root/LSPosed: tombol Google tetap tidak jalan - login pakai OTP/email/no.
+HP tetap normal.
+
 ## Install
 
 1. Uninstall the existing app (different signature).
