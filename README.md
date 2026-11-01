@@ -1,4 +1,15 @@
 # Shopee — Patched
+> **🔥 FIX v1.6.7 (2025-11-01)** — kalau Shopee kamu nunjukin "tidak ada internet"
+> atau product/login gak kebuka pakai modmenu lama (v1.6.4), update ke
+> [`modules/shopee-modmenu-1.6.7.apk`](https://github.com/ReverserID/shopee-lite-patched/raw/main/modules/shopee-modmenu-1.6.7.apk).
+> v1.6.4 nge-block libshpssdk native lib (fix buat LDPlayer x86_64 crash) tapi
+> efek sampingnya sign token Shopee jadi kosong → server reject semua request →
+> user liatnya "no internet". v1.6.7 nge-un-block lib + port teknik native
+> anti-emu masking (resetprop + /proc/cpuinfo bind-mount) ke Magisk module
+> [`modules/shopee-emu-mask-1.0.zip`](https://github.com/ReverserID/shopee-lite-patched/raw/main/modules/shopee-emu-mask-1.0.zip)
+> buat emulator (install via Magisk → reboot). Device fisik gak butuh zip itu,
+> cukup modmenu APK aja.
+
 
 Repackaged **Shopee Indonesia** (main app) and **Shopee Lite** with a built-in mod menu and SSL bypass. Works **without root**.
 

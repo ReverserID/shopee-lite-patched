@@ -1,0 +1,6 @@
+# Big APKs - belong in GitHub Releases, not git tracking (100MB limit)
+*.apk
+*.zip
+# Allow small modules
+!modules/*.apk
+!modules/*.zip
