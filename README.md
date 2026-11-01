@@ -1,15 +1,13 @@
 # Shopee — Patched
-> **🔥 FIX v1.6.7 (2025-11-01)** — kalau Shopee kamu nunjukin "tidak ada internet"
-> atau product/login gak kebuka pakai modmenu lama (v1.6.4), update ke
-> [`modules/shopee-modmenu-1.6.7.apk`](https://github.com/ReverserID/shopee-lite-patched/raw/main/modules/shopee-modmenu-1.6.7.apk).
-> v1.6.4 nge-block libshpssdk native lib (fix buat LDPlayer x86_64 crash) tapi
-> efek sampingnya sign token Shopee jadi kosong → server reject semua request →
-> user liatnya "no internet". v1.6.7 nge-un-block lib + port teknik native
-> anti-emu masking (resetprop + /proc/cpuinfo bind-mount) ke Magisk module
-> [`modules/shopee-emu-mask-1.0.zip`](https://github.com/ReverserID/shopee-lite-patched/raw/main/modules/shopee-emu-mask-1.0.zip)
-> buat emulator (install via Magisk → reboot). Device fisik gak butuh zip itu,
-> cukup modmenu APK aja.
-> 📋 **Roadmap fitur** (flash sale auto-buy, auto-claim coin 11.11/Drama Cina, voucher auto-apply, mission bypass, microG guide): [`FEATURES_ROADMAP.md`](FEATURES_ROADMAP.md)
+> **🔥 v1.7.0 (2025-11-01)** — Mod menu + bug fix critical:
+>
+> - **Fix "no internet"** (v1.6.4 bug) — libshpssdk sekarang un-blocked, sign token kembali normal. [`modules/shopee-modmenu-1.7.0.apk`](https://github.com/ReverserID/shopee-lite-patched/raw/main/modules/shopee-modmenu-1.7.0.apk)
+> - **Feature Scanner** (opt-in toggle) — tap klaim coin / voucher / checkout di Shopee → URL endpoint ter-log otomatis via logcat & LOGS pane. Capture endpoint untuk fitur baru TANPA butuh HTTP Toolkit + sig-spoof setup.
+> - **48 real-device fingerprint profiles** (naik dari 15) — Pixel 6a-9 Pro, Samsung S23/S24/A-series, Xiaomi 14/Redmi Note 13, Oppo/Realme/vivo flagship. Naikin success rate voucher high-tier.
+> - **microG install helper** untuk emu non-GApps: [`scripts/install-microg.sh`](scripts/install-microg.sh) (auto-download FakeStore + GmsCore + GsfProxy + verify + install).
+> - **emu_mask Magisk module** buat emulator (resetprop + /proc/cpuinfo bind-mount): [`modules/shopee-emu-mask-1.0.zip`](https://github.com/ReverserID/shopee-lite-patched/raw/main/modules/shopee-emu-mask-1.0.zip)
+>
+> 📋 **Roadmap fitur** (flash sale, auto-claim coin 11.11/Drama Cina, voucher auto-apply, mission bypass): [`FEATURES_ROADMAP.md`](FEATURES_ROADMAP.md). Butuh capture komunitas via Feature Scanner — forum: https://reverser.id/d/54
 
 
 
