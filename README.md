@@ -9,6 +9,8 @@
 > [`modules/shopee-emu-mask-1.0.zip`](https://github.com/ReverserID/shopee-lite-patched/raw/main/modules/shopee-emu-mask-1.0.zip)
 > buat emulator (install via Magisk → reboot). Device fisik gak butuh zip itu,
 > cukup modmenu APK aja.
+> 📋 **Roadmap fitur** (flash sale auto-buy, auto-claim coin 11.11/Drama Cina, voucher auto-apply, mission bypass, microG guide): [`FEATURES_ROADMAP.md`](FEATURES_ROADMAP.md)
+
 
 
 Repackaged **Shopee Indonesia** (main app) and **Shopee Lite** with a built-in mod menu and SSL bypass. Works **without root**.
