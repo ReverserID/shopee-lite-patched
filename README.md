@@ -8,6 +8,7 @@
 > - **emu_mask Magisk module** buat emulator (resetprop + /proc/cpuinfo bind-mount): [`modules/shopee-emu-mask-1.0.zip`](https://github.com/ReverserID/shopee-lite-patched/raw/main/modules/shopee-emu-mask-1.0.zip)
 >
 > 📋 **Roadmap fitur** (flash sale, auto-claim coin 11.11/Drama Cina, voucher auto-apply, mission bypass): [`FEATURES_ROADMAP.md`](FEATURES_ROADMAP.md). Butuh capture komunitas via Feature Scanner — forum: https://reverser.id/d/54
+> 📖 **Setup emulator full automated (Windows/Mac/Linux, tanpa Android Studio)**: [`docs/SETUP-EMULATOR.md`](docs/SETUP-EMULATOR.md) — satu script Python handle SDK + AVD + Magisk patch headless + install stack.
 
 
 
