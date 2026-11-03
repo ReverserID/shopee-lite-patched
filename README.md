@@ -1,10 +1,12 @@
 # Shopee — Patched
-> **🔥 v1.7.0 (2025-11-01)** — Mod menu + bug fix critical:
+> **🔥 v1.7.2 (2025-11-03)** — Mod menu stability patch:
 >
-> - **Fix "no internet"** (v1.6.4 bug) — libshpssdk sekarang un-blocked, sign token kembali normal. [`modules/shopee-modmenu-1.7.0.apk`](https://github.com/ReverserID/shopee-lite-patched/raw/main/modules/shopee-modmenu-1.7.0.apk)
-> - **Feature Scanner** (opt-in toggle) — tap klaim coin / voucher / checkout di Shopee → URL endpoint ter-log otomatis via logcat & LOGS pane. Capture endpoint untuk fitur baru TANPA butuh HTTP Toolkit + sig-spoof setup.
-> - **48 real-device fingerprint profiles** (naik dari 15) — Pixel 6a-9 Pro, Samsung S23/S24/A-series, Xiaomi 14/Redmi Note 13, Oppo/Realme/vivo flagship. Naikin success rate voucher high-tier.
-> - **microG install helper** untuk emu non-GApps: [`scripts/install-microg.sh`](scripts/install-microg.sh) (auto-download FakeStore + GmsCore + GsfProxy + verify + install).
+> - **Fix "undefined" toast + Beli Sekarang gak jalan** — `hookWebViewTraffic` lama nge-block captcha page Shopee ("/verify/traffic/error" untuk risk-flagged sessions) → infinite loop + JS error. Sekarang captcha render normal, user solve puzzle, lanjut checkout. [`modules/shopee-modmenu-1.7.2.apk`](https://github.com/ReverserID/shopee-lite-patched/raw/main/modules/shopee-modmenu-1.7.2.apk)
+> - **Fix "data login forum ilang mulu"** — StateStore lama cuma tulis via `su -c` yg fail di Shopee's app context. Sekarang tulis ke `/data/data/com.shopee.id/files/` (app sandbox, no root needed). Login forum sekali → persist across restarts.
+> - **Fix tracker over-block** (v1.7.1) — `/receiver/api/v1/receiver/timestamp` endpoint tidak lagi di-block (penting buat sign timing). Only `/log-receiver/`, `/apt-log-receiver/`, `/event-receiver/` paths patronus di-stub.
+> - **Feature Scanner** (opt-in toggle, v1.7.0) — tap klaim coin / voucher / checkout di Shopee → URL endpoint ter-log otomatis via logcat & LOGS pane. Capture endpoint TANPA HTTP Toolkit setup.
+> - **48 real-device fingerprint profiles** (v1.7.0) — Pixel 6a-9 Pro, Samsung S23/S24/A-series, Xiaomi 14/Redmi Note 13, Oppo/Realme/vivo flagship.
+> - **microG install helper** untuk emu non-GApps: [`scripts/install-microg.sh`](scripts/install-microg.sh)
 > - **emu_mask Magisk module** buat emulator (resetprop + /proc/cpuinfo bind-mount): [`modules/shopee-emu-mask-1.0.zip`](https://github.com/ReverserID/shopee-lite-patched/raw/main/modules/shopee-emu-mask-1.0.zip)
 >
 > 📋 **Roadmap fitur** (flash sale, auto-claim coin 11.11/Drama Cina, voucher auto-apply, mission bypass): [`FEATURES_ROADMAP.md`](FEATURES_ROADMAP.md). Butuh capture komunitas via Feature Scanner — forum: https://reverser.id/d/54
