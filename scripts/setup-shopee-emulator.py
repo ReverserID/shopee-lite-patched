@@ -1,37 +1,34 @@
 #!/usr/bin/env python3
 """
-setup-shopee-emulator.py — one-shot headless setup Shopee patched di Android
-emulator di Windows / Mac / Linux, tanpa Android Studio GUI.
+setup-shopee-emulator.py — interactive installer Shopee patched di Android emulator.
 
-Yang di-automate (end-to-end):
-  1. Download Android commandline-tools (OS-specific) ke ~/android-sdk-shopee
-  2. sdkmanager install: platform-tools, emulator, Android 34 system image
-  3. avdmanager create Pixel 7 AVD
-  4. Download Magisk APK -> extract magiskboot
-  5. Patch system-image ramdisk.img pakai magiskboot (headless, bukan GUI)
-  6. Download Shopee patched + modmenu + gmsfix + emu_mask + Vector LSPosed
-  7. Boot AVD, install stack, enable modules, reboot
-  8. Launch Shopee + verify
+Jalanin tanpa argument untuk menu interaktif, atau pakai --preset untuk mode batch.
 
-Pakai:
-    python3 setup-shopee-emulator.py                    # full flow
-    python3 setup-shopee-emulator.py --skip-sdk         # SDK udah ada
-    python3 setup-shopee-emulator.py --skip-avd         # AVD udah dibikin
-    python3 setup-shopee-emulator.py --phase sdk        # cuma SDK
-    python3 setup-shopee-emulator.py --phase apps       # cuma install apps
-    python3 setup-shopee-emulator.py --phase launch     # cuma boot + launch
+Menu:
+  1. Setup emulator baru from scratch (SDK + AVD + Magisk + stack) — ~15 min, ~3 GB
+  2. Install stack ke emulator existing yang sudah rooted Magisk — ~3 min
+  3. Patch Magisk ke AVD existing (SDK + AVD sudah ada, tinggal rootinginnya) — ~2 min
+  4. Install cuma Shopee + modmenu + gmsfix (skip LSPosed/emu-mask) — ~1 min
+  5. Install microG stack (buat emulator non-GApps / login Google alt) — ~2 min
+  6. Verify current state (adb check, module list, hook trace)
+  7. Launch Shopee + grab screenshot
+  8. Reset state checkpoint (buat rerun semua fresh)
+  0. Exit
 
-Semua state di-persist di ~/android-sdk-shopee (SDK) + ~/.shupi-setup/ (cache,
-checkpoint). Script idempotent — aman di-rerun.
+Preset non-interactive:
+  --preset full-fresh      = menu 1
+  --preset install-stack   = menu 2
+  --preset patch-magisk    = menu 3
+  --preset shopee-only     = menu 4
+  --preset microg          = menu 5
+  --preset verify          = menu 6
 
-Dependency: Python 3.8+. Nggak butuh adb/emulator pre-install (script yang
-install). Nggak butuh Android Studio.
+Dependency: Python 3.8+. Script auto-download semua tool (SDK, Magisk, modules).
 """
 
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import platform
@@ -45,7 +42,7 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-# ---- Konfigurasi: URL + versi (ganti kalau mau pin ke version lain) ----
+# ---- Konfigurasi ----
 
 CMDLINE_TOOLS_VERSION = "11076708"
 CMDLINE_TOOLS_URL = {
@@ -53,21 +50,19 @@ CMDLINE_TOOLS_URL = {
     "darwin":  f"https://dl.google.com/android/repository/commandlinetools-mac-{CMDLINE_TOOLS_VERSION}_latest.zip",
     "linux":   f"https://dl.google.com/android/repository/commandlinetools-linux-{CMDLINE_TOOLS_VERSION}_latest.zip",
 }
-
 SDK_PACKAGES = [
     "platform-tools",
     "emulator",
     "platforms;android-34",
     "system-images;android-34;google_apis_playstore;x86_64",
 ]
-
 AVD_NAME       = "ShopeeAVD"
 AVD_DEVICE     = "pixel_7"
 AVD_SYSIMG     = "system-images;android-34;google_apis_playstore;x86_64"
-AVD_SDCARD_MB  = 2048
 AVD_RAM_MB     = 4096
 AVD_HEAP_MB    = 512
 AVD_DISK_MB    = 8192
+AVD_SDCARD_MB  = 2048
 
 MAGISK_URL      = "https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk"
 VECTOR_URL      = "https://github.com/JingMatrix/LSPosed/releases/download/v1.9.2/LSPosed-v1.9.2-7024-zygisk-release.zip"
@@ -76,31 +71,51 @@ GMSFIX_URL      = "https://github.com/ReverserID/shopee-lite-patched/raw/main/mo
 EMUMASK_URL     = "https://github.com/ReverserID/shopee-lite-patched/raw/main/modules/shopee-emu-mask-1.0.zip"
 SHOPEE_APK_URL  = "https://github.com/ReverserID/shopee-lite-patched/releases/download/v3.83.36/shopee-3.83.36-patched.apk"
 
+MICROG_URLS = {
+    "FakeStore.apk": "https://github.com/microg/FakeStore/releases/latest/download/FakeStore.apk",
+    "GmsCore.apk":   "https://github.com/microg/GmsCore/releases/latest/download/com.google.android.gms-237816016.apk",
+    "GsfProxy.apk":  "https://github.com/microg/GsfProxy/releases/latest/download/GsfProxy.apk",
+}
+
 HOME        = Path.home()
-SDK_HOME    = HOME / "android-sdk-shopee"
+SDK_HOME    = Path(os.environ.get("ANDROID_HOME", HOME / "android-sdk-shopee"))
 CACHE_HOME  = HOME / ".shupi-setup"
 STATE_FILE  = CACHE_HOME / "state.json"
 
-# ---- Platform detection ----
-
-def detect_os() -> str:
-    sys_name = platform.system().lower()
-    if sys_name not in ("windows", "darwin", "linux"):
-        die(f"Unsupported OS: {sys_name}")
-    return sys_name
-
-OS = detect_os()
+OS = platform.system().lower()
 IS_WIN = OS == "windows"
-EXE = ".bat" if IS_WIN else ""
+EXE_BAT = ".bat" if IS_WIN else ""
+EXE_EXE = ".exe" if IS_WIN else ""
 
-# ---- Logging + state ----
+# ---- Logging ----
 
-def log(msg: str, prefix: str = "*") -> None:
-    print(f"[{prefix}] {msg}", flush=True)
+def c(s: str, color: str) -> str:
+    codes = {"r": "31", "g": "32", "y": "33", "b": "34", "m": "35", "cy": "36", "w": "37", "bld": "1"}
+    if not sys.stdout.isatty() or IS_WIN:
+        return s
+    return f"\033[{codes.get(color, '0')}m{s}\033[0m"
 
-def die(msg: str, code: int = 1) -> "NoReturn":
-    log(msg, prefix="!")
+def log(msg: str, color: str = "cy") -> None:
+    print(c(f"[*] {msg}", color), flush=True)
+
+def ok(msg: str) -> None:
+    print(c(f"[+] {msg}", "g"), flush=True)
+
+def warn(msg: str) -> None:
+    print(c(f"[!] {msg}", "y"), flush=True)
+
+def die(msg: str, code: int = 1) -> None:
+    print(c(f"[x] {msg}", "r"), file=sys.stderr, flush=True)
     sys.exit(code)
+
+def section(title: str) -> None:
+    bar = "═" * (len(title) + 4)
+    print()
+    print(c(bar, "b"))
+    print(c(f"  {title}", "bld"))
+    print(c(bar, "b"))
+
+# ---- State ----
 
 def load_state() -> dict:
     if not STATE_FILE.exists():
@@ -122,23 +137,26 @@ def mark(key: str, value=True) -> None:
 def done(key: str) -> bool:
     return bool(load_state().get(key))
 
-# ---- Download helpers ----
+# ---- Download ----
 
 def download(url: str, out: Path, min_bytes: int = 1024) -> Path:
     out.parent.mkdir(parents=True, exist_ok=True)
     if out.exists() and out.stat().st_size >= min_bytes:
         log(f"cached: {out.name} ({out.stat().st_size:,} bytes)")
         return out
-    log(f"downloading {url}")
+    log(f"download {url}")
     tmp = out.with_suffix(out.suffix + ".tmp")
-    with urllib.request.urlopen(url) as r, open(tmp, "wb") as f:
-        shutil.copyfileobj(r, f)
+    try:
+        with urllib.request.urlopen(url, timeout=120) as r, open(tmp, "wb") as f:
+            shutil.copyfileobj(r, f)
+    except Exception as e:
+        die(f"download failed: {e}")
     size = tmp.stat().st_size
     if size < min_bytes:
         tmp.unlink()
-        die(f"download too small ({size} bytes) — URL dead or redirected: {url}")
+        die(f"download too small ({size} bytes), kemungkinan URL mati / redirect: {url}")
     tmp.rename(out)
-    log(f"saved: {out.name} ({size:,} bytes)")
+    ok(f"saved: {out.name} ({size:,} bytes)")
     return out
 
 def unzip(zip_path: Path, out_dir: Path) -> None:
@@ -147,45 +165,107 @@ def unzip(zip_path: Path, out_dir: Path) -> None:
         z.extractall(out_dir)
 
 def chmodx(path: Path) -> None:
-    if not IS_WIN:
+    if not IS_WIN and path.exists():
         path.chmod(path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
 
-# ---- Shell runners ----
+# ---- Shell ----
 
-def run(cmd, check: bool = True, timeout: int = None, env: dict = None, cwd: Path = None, stdin: str = None) -> subprocess.CompletedProcess:
-    log(f"$ {' '.join(str(c) for c in cmd)}", prefix="$")
+def run(cmd, check: bool = True, timeout: int = None, env: dict = None, cwd: Path = None,
+        stdin: str = None, quiet: bool = False) -> subprocess.CompletedProcess:
+    if not quiet:
+        log(f"$ {' '.join(str(c) for c in cmd)}")
     r = subprocess.run(
-        [str(c) for c in cmd],
+        [str(x) for x in cmd],
         capture_output=True, text=True,
         check=False, timeout=timeout,
         env=env or os.environ, cwd=cwd, input=stdin,
     )
-    if r.stdout.strip():
+    if r.stdout.strip() and not quiet:
         print(r.stdout.rstrip())
-    if r.stderr.strip():
+    if r.stderr.strip() and not quiet:
         print(r.stderr.rstrip(), file=sys.stderr)
     if check and r.returncode != 0:
-        die(f"command failed (exit {r.returncode}): {' '.join(str(c) for c in cmd)}")
+        die(f"command failed (exit {r.returncode}): {' '.join(str(x) for x in cmd)}")
     return r
 
 def run_async(cmd, env: dict = None, cwd: Path = None) -> subprocess.Popen:
-    log(f"$ {' '.join(str(c) for c in cmd)} &", prefix="$")
+    log(f"$ {' '.join(str(x) for x in cmd)} &")
     return subprocess.Popen(
-        [str(c) for c in cmd],
+        [str(x) for x in cmd],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         env=env or os.environ, cwd=cwd,
     )
 
-# ---- Phase 1: SDK setup ----
+# ---- Device discovery ----
 
-def phase_sdk() -> None:
-    if done("sdk_installed"):
-        log("SDK sudah installed, skip")
+def adb_bin() -> Path:
+    p = SDK_HOME / "platform-tools" / f"adb{EXE_EXE}"
+    if not p.exists():
+        # Fallback: system adb
+        sys_adb = shutil.which("adb")
+        if sys_adb:
+            return Path(sys_adb)
+        die(f"adb tidak ditemukan di {p} atau PATH. Jalanin phase SDK dulu.")
+    return p
+
+def adb(args: list, device: str = None, check: bool = True, timeout: int = 60) -> subprocess.CompletedProcess:
+    cmd = [adb_bin()]
+    if device:
+        cmd += ["-s", device]
+    cmd += args
+    return run(cmd, check=check, timeout=timeout, quiet=True)
+
+def list_devices() -> list:
+    """Returns list of (serial, status) tuples."""
+    try:
+        r = adb(["devices"], check=False)
+    except SystemExit:
+        return []
+    devices = []
+    for line in r.stdout.splitlines()[1:]:
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split("\t")
+        if len(parts) == 2:
+            devices.append((parts[0], parts[1]))
+    return devices
+
+def pick_device() -> str:
+    devs = list_devices()
+    online = [(s, st) for s, st in devs if st == "device"]
+    if not online:
+        die("no device online. Boot emulator dulu (menu 1 atau 3), atau connect physical via adb.")
+    if len(online) == 1:
+        return online[0][0]
+    print()
+    log("multiple devices connected, pilih:")
+    for i, (s, st) in enumerate(online, 1):
+        prop = adb(["-s", s, "shell", "getprop", "ro.product.model"], check=False)
+        model = prop.stdout.strip() if prop.returncode == 0 else "?"
+        print(f"  {i}. {s} ({model})")
+    while True:
+        ans = input(c("Pilih (nomor): ", "y")).strip()
+        try:
+            return online[int(ans) - 1][0]
+        except (ValueError, IndexError):
+            print(c("input invalid, coba lagi", "r"))
+
+def is_rooted(dev: str) -> bool:
+    r = adb(["-s", dev, "shell", "su", "-c", "id"], check=False)
+    return r.returncode == 0 and "uid=0" in r.stdout
+
+# ---- Flows ----
+
+def flow_sdk() -> None:
+    section("Download & setup Android SDK (cmdline-tools)")
+    if done("sdk_installed") and (SDK_HOME / "platform-tools" / f"adb{EXE_EXE}").exists():
+        ok("SDK sudah installed, skip")
         return
-    log("=== PHASE 1: Android SDK ===", prefix=">")
-    SDK_HOME.mkdir(parents=True, exist_ok=True)
 
-    # Download + extract commandline-tools ke SDK_HOME/cmdline-tools/latest
+    SDK_HOME.mkdir(parents=True, exist_ok=True)
+    if OS not in CMDLINE_TOOLS_URL:
+        die(f"OS tidak didukung: {OS}")
     zip_cache = CACHE_HOME / f"cmdline-tools-{OS}.zip"
     download(CMDLINE_TOOLS_URL[OS], zip_cache, min_bytes=50 * 1024 * 1024)
 
@@ -193,70 +273,47 @@ def phase_sdk() -> None:
     if not (tgt / "bin").exists():
         with tempfile.TemporaryDirectory() as tmp:
             unzip(zip_cache, Path(tmp))
-            # Zip extracts to "cmdline-tools/..." — pindahkan ke SDK/cmdline-tools/latest
             src = Path(tmp) / "cmdline-tools"
             if tgt.exists():
                 shutil.rmtree(tgt)
             tgt.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(src), str(tgt))
-        log(f"extracted cmdline-tools -> {tgt}")
+        ok(f"extracted cmdline-tools -> {tgt}")
 
-    # Install packages via sdkmanager (dgn auto-accept license)
-    sdkmanager = tgt / "bin" / f"sdkmanager{EXE}"
+    sdkmanager = tgt / "bin" / f"sdkmanager{EXE_BAT}"
     chmodx(sdkmanager)
     env = os.environ.copy()
     env["ANDROID_HOME"] = str(SDK_HOME)
     env["ANDROID_SDK_ROOT"] = str(SDK_HOME)
 
-    # Accept all licenses (dengan 'yes' feed stdin)
     log("accepting SDK licenses...")
-    r = subprocess.run(
-        [str(sdkmanager), "--licenses", f"--sdk_root={SDK_HOME}"],
-        input="y\n" * 20, text=True, env=env,
-        capture_output=True, timeout=120,
-    )
-    if r.returncode != 0 and "All SDK package licenses accepted" not in r.stdout:
-        log(f"license output: {r.stdout}")
+    subprocess.run([str(sdkmanager), "--licenses", f"--sdk_root={SDK_HOME}"],
+                   input="y\n" * 20, text=True, env=env,
+                   capture_output=True, timeout=120)
 
-    # Install packages
-    log(f"installing: {', '.join(SDK_PACKAGES)} (~2 GB download)")
+    log(f"installing packages: {', '.join(SDK_PACKAGES)} (~2 GB)")
     run([str(sdkmanager), f"--sdk_root={SDK_HOME}", "--install"] + SDK_PACKAGES,
         env=env, timeout=1800)
 
     mark("sdk_installed")
-    log("SDK installed OK")
+    ok("SDK installed")
 
-# ---- Phase 2: AVD creation ----
-
-def phase_avd() -> None:
+def flow_avd() -> None:
+    section("Create AVD (Pixel 7, API 34)")
     if done("avd_created"):
-        log("AVD sudah dibikin, skip")
+        ok("AVD sudah dibikin, skip")
         return
-    log("=== PHASE 2: AVD creation ===", prefix=">")
-
-    avdmanager = SDK_HOME / "cmdline-tools" / "latest" / "bin" / f"avdmanager{EXE}"
+    avdmanager = SDK_HOME / "cmdline-tools" / "latest" / "bin" / f"avdmanager{EXE_BAT}"
     chmodx(avdmanager)
     env = os.environ.copy()
     env["ANDROID_HOME"] = str(SDK_HOME)
     env["ANDROID_SDK_ROOT"] = str(SDK_HOME)
+    log(f"creating AVD '{AVD_NAME}'")
+    subprocess.run([str(avdmanager), "create", "avd", "-n", AVD_NAME,
+                    "-k", AVD_SYSIMG, "-d", AVD_DEVICE, "--force"],
+                   input="no\n", text=True, env=env,
+                   capture_output=False, timeout=120)
 
-    # Create AVD (echo "no" buat skip custom hardware prompt)
-    log(f"creating AVD '{AVD_NAME}' (device={AVD_DEVICE}, img={AVD_SYSIMG})")
-    r = subprocess.run(
-        [str(avdmanager), "create", "avd",
-         "-n", AVD_NAME,
-         "-k", AVD_SYSIMG,
-         "-d", AVD_DEVICE,
-         "--force"],
-        input="no\n", text=True, env=env,
-        capture_output=True, timeout=120,
-    )
-    print(r.stdout)
-    if r.returncode != 0:
-        print(r.stderr, file=sys.stderr)
-        die("avdmanager create failed")
-
-    # Tweak AVD config.ini biar RAM + disk layak
     cfg = HOME / ".android" / "avd" / f"{AVD_NAME}.avd" / "config.ini"
     if cfg.exists():
         lines = cfg.read_text().splitlines()
@@ -268,273 +325,390 @@ def phase_avd() -> None:
             "hw.gpu.enabled": "yes",
             "hw.gpu.mode": "auto",
         }
-        seen = set()
-        new_lines = []
+        seen, new = set(), []
         for ln in lines:
             if "=" in ln:
                 k = ln.split("=", 1)[0].strip()
                 if k in updates:
-                    new_lines.append(f"{k} = {updates[k]}")
+                    new.append(f"{k} = {updates[k]}")
                     seen.add(k)
                     continue
-            new_lines.append(ln)
+            new.append(ln)
         for k, v in updates.items():
             if k not in seen:
-                new_lines.append(f"{k} = {v}")
-        cfg.write_text("\n".join(new_lines) + "\n")
-        log(f"patched {cfg.name}: RAM={AVD_RAM_MB}MB disk={AVD_DISK_MB}MB")
+                new.append(f"{k} = {v}")
+        cfg.write_text("\n".join(new) + "\n")
+        ok(f"patched {cfg.name}: RAM={AVD_RAM_MB}MB disk={AVD_DISK_MB}MB")
 
     mark("avd_created")
-    log("AVD created OK")
+    ok("AVD created")
 
-# ---- Phase 3: Magisk ramdisk patch (HEADLESS, no GUI) ----
-
-def phase_magisk() -> None:
+def flow_magisk_patch() -> None:
+    section("Patch system-image ramdisk pakai Magisk (headless)")
     if done("magisk_patched"):
-        log("ramdisk sudah di-patch Magisk, skip")
+        ok("ramdisk sudah di-patch, skip")
         return
-    log("=== PHASE 3: Magisk ramdisk patch (headless) ===", prefix=">")
 
-    # Download Magisk APK
     magisk_apk = CACHE_HOME / "Magisk.apk"
     download(MAGISK_URL, magisk_apk, min_bytes=5 * 1024 * 1024)
 
-    # Extract magiskboot + lain-lain dari APK (ini binary native, langsung dipake di host)
     work = CACHE_HOME / "magisk_work"
     if work.exists():
         shutil.rmtree(work)
     work.mkdir(parents=True)
     with zipfile.ZipFile(magisk_apk) as z:
-        # Pilih ABI yg cocok sama host OS
-        host_abi = "x86_64" if platform.machine() in ("x86_64", "AMD64") else "arm64-v8a"
-        # Mac arm = arm64, Mac x86 = x86_64. Linux x86 = x86_64. Windows x86 = x86_64.
-        if OS == "darwin" and platform.machine() == "arm64":
+        host_abi = "x86_64"
+        if platform.machine() in ("arm64", "aarch64"):
             host_abi = "arm64-v8a"
         for n in z.namelist():
             if n.startswith(f"lib/{host_abi}/lib") and n.endswith(".so"):
-                tgt = work / Path(n).name.replace("lib", "").replace(".so", "")
+                tgt = work / Path(n).name.replace("lib", "", 1).replace(".so", "")
                 tgt.write_bytes(z.read(n))
                 chmodx(tgt)
-                log(f"extracted {n} -> {tgt.name}")
 
     magiskboot = work / "magiskboot"
     if not magiskboot.exists():
-        die(f"magiskboot binary not found in Magisk.apk (lib/{host_abi}/)")
+        die(f"magiskboot binary tidak ketemu di Magisk.apk (lib/{host_abi}/)")
 
-    # Find system-image ramdisk.img
     sysimg_dir = SDK_HOME / "system-images" / "android-34" / "google_apis_playstore" / "x86_64"
     ramdisk = sysimg_dir / "ramdisk.img"
     if not ramdisk.exists():
-        die(f"ramdisk.img not found at {ramdisk} — pastikan Phase 1 beres")
+        die(f"ramdisk.img tidak ketemu di {ramdisk}. Install system image dulu (menu SDK).")
 
-    # Backup original (one-time)
     orig = sysimg_dir / "ramdisk.img.orig"
     if not orig.exists():
         shutil.copy2(ramdisk, orig)
-        log(f"backed up ramdisk.img -> {orig.name}")
+        ok(f"backed up ramdisk.img -> {orig.name}")
 
-    # Patch ramdisk: pakai magiskboot cpio untuk inject Magisk init ke dalam ramdisk
-    # (AVD punya ramdisk standalone, bukan boot.img)
     work_patch = CACHE_HOME / "ramdisk_patch"
     if work_patch.exists():
         shutil.rmtree(work_patch)
     work_patch.mkdir()
-
     shutil.copy2(orig, work_patch / "ramdisk.cpio")
     for n in ["magiskinit", "magisk32", "magisk64", "magiskboot", "busybox"]:
         p = work / n
         if p.exists():
             shutil.copy2(p, work_patch / n)
 
-    # Jalanin magiskboot cpio patch (sama kaya boot_patch.sh langkah terakhir)
     env = os.environ.copy()
     env["KEEPVERITY"] = "true"
     env["KEEPFORCEENCRYPT"] = "true"
-    env["PATCHVBMETAFLAG"] = "false"
-    env["RECOVERYMODE"] = "false"
 
-    cmd = [str(magiskboot), "compress=xz", "magisk32", "magisk32.xz"]
-    run(cmd, cwd=work_patch, env=env, check=False)
-    cmd = [str(magiskboot), "compress=xz", "magisk64", "magisk64.xz"]
-    run(cmd, cwd=work_patch, env=env, check=False)
+    for binname in ("magisk32", "magisk64"):
+        if (work_patch / binname).exists():
+            run([str(magiskboot), "compress=xz", binname, f"{binname}.xz"],
+                cwd=work_patch, env=env, check=False, quiet=True)
 
-    # Inject magisk payload ke ramdisk cpio
+    (work_patch / "config").write_text("KEEPVERITY=true\nKEEPFORCEENCRYPT=true\nRECOVERYMODE=false\n")
+
     cpio_cmds = [
-        "add 0750 init magiskinit",
-        "mkdir 0750 overlay.d",
-        "mkdir 0750 overlay.d/sbin",
-        "add 0644 overlay.d/sbin/magisk32.xz magisk32.xz",
-        "add 0644 overlay.d/sbin/magisk64.xz magisk64.xz",
-        "patch",
-        "backup ramdisk.cpio",
-        "mkdir 000 .backup",
-        "add 000 .backup/.magisk config",
+        ["add", "0750", "init", "magiskinit"],
+        ["mkdir", "0750", "overlay.d"],
+        ["mkdir", "0750", "overlay.d/sbin"],
     ]
-    # Write Magisk config
-    (work_patch / "config").write_text(
-        "KEEPVERITY=true\nKEEPFORCEENCRYPT=true\nRECOVERYMODE=false\n"
-    )
-    for cmd_line in cpio_cmds:
-        run([str(magiskboot), "cpio", "ramdisk.cpio"] + cmd_line.split(),
-            cwd=work_patch, env=env, check=False)
+    if (work_patch / "magisk32.xz").exists():
+        cpio_cmds.append(["add", "0644", "overlay.d/sbin/magisk32.xz", "magisk32.xz"])
+    if (work_patch / "magisk64.xz").exists():
+        cpio_cmds.append(["add", "0644", "overlay.d/sbin/magisk64.xz", "magisk64.xz"])
+    cpio_cmds += [
+        ["patch"],
+        ["backup", "ramdisk.cpio"],
+        ["mkdir", "000", ".backup"],
+        ["add", "000", ".backup/.magisk", "config"],
+    ]
+    for args in cpio_cmds:
+        run([str(magiskboot), "cpio", "ramdisk.cpio"] + args,
+            cwd=work_patch, env=env, check=False, quiet=True)
 
-    # Replace ramdisk.img dgn versi patched
-    patched = work_patch / "ramdisk.cpio"
-    shutil.copy2(patched, ramdisk)
-    log(f"patched ramdisk written: {ramdisk} ({ramdisk.stat().st_size:,} bytes)")
-
+    shutil.copy2(work_patch / "ramdisk.cpio", ramdisk)
+    ok(f"patched ramdisk written: {ramdisk}")
     mark("magisk_patched")
-    log("Magisk patch applied")
 
-# ---- Phase 4: Boot AVD + install stack ----
-
-def adb(args: list, device: str = None, check: bool = True, timeout: int = 60) -> subprocess.CompletedProcess:
-    adb_bin = SDK_HOME / "platform-tools" / f"adb{EXE[:-1] + '.exe' if IS_WIN else ''}"
-    cmd = [str(adb_bin)]
-    if device:
-        cmd += ["-s", device]
-    cmd += args
-    return run(cmd, check=check, timeout=timeout)
-
-def start_emulator() -> subprocess.Popen:
-    emu_bin = SDK_HOME / "emulator" / f"emulator{EXE[:-1] + '.exe' if IS_WIN else ''}"
+def start_emulator(wait: bool = True, timeout: int = 300) -> str:
+    """Returns device serial. Starts emulator if not running."""
+    devs = [d for d, st in list_devices() if st == "device" and "emulator" in d]
+    if devs:
+        ok(f"emulator sudah jalan: {devs[0]}")
+        return devs[0]
+    emu_bin = SDK_HOME / "emulator" / f"emulator{EXE_EXE}"
+    if not emu_bin.exists():
+        die(f"emulator binary tidak ketemu: {emu_bin}")
     env = os.environ.copy()
     env["ANDROID_HOME"] = str(SDK_HOME)
     env["ANDROID_SDK_ROOT"] = str(SDK_HOME)
-    return run_async([str(emu_bin), "-avd", AVD_NAME, "-no-snapshot-load",
-                      "-writable-system", "-no-boot-anim"], env=env)
-
-def wait_boot(timeout: int = 300) -> str:
-    log(f"waiting for emulator boot (timeout {timeout}s)...")
+    log("starting emulator...")
+    run_async([str(emu_bin), "-avd", AVD_NAME, "-no-snapshot-load",
+               "-writable-system", "-no-boot-anim"], env=env)
+    if not wait:
+        return ""
+    log(f"waiting for boot (timeout {timeout}s)...")
     start = time.time()
     while time.time() - start < timeout:
-        r = adb(["devices"], check=False, timeout=10)
-        for line in r.stdout.splitlines():
-            if line.endswith("\tdevice") and "emulator" in line:
-                dev = line.split("\t")[0]
-                # Check boot complete
-                r2 = adb(["-s", dev, "shell", "getprop", "sys.boot_completed"],
-                         check=False, timeout=10)
-                if r2.stdout.strip() == "1":
-                    log(f"boot complete: {dev}")
-                    return dev
+        for s, st in list_devices():
+            if st == "device" and "emulator" in s:
+                r = adb(["-s", s, "shell", "getprop", "sys.boot_completed"], check=False)
+                if r.stdout.strip() == "1":
+                    ok(f"boot complete: {s}")
+                    return s
         time.sleep(5)
-    die("emulator boot timeout")
+    die("boot timeout")
 
-def phase_apps() -> None:
-    if done("apps_installed"):
-        log("stack sudah ter-install, skip")
-        return
-    log("=== PHASE 4: Boot AVD + install stack ===", prefix=">")
+def flow_install_stack(dev: str = None) -> None:
+    section("Install stack (Magisk Manager + Shopee + modmenu + gmsfix + LSPosed + emu-mask)")
+    if not dev:
+        dev = pick_device()
+    log(f"target device: {dev}")
 
-    # Download semua binary dulu
     files = {
-        "Magisk.apk":        download(MAGISK_URL, CACHE_HOME / "Magisk.apk", 5 * 1024 * 1024),
-        "LSPosed.zip":       download(VECTOR_URL, CACHE_HOME / "LSPosed.zip", 2 * 1024 * 1024),
-        "modmenu.apk":       download(MODMENU_URL, CACHE_HOME / "shopee-modmenu.apk", 50 * 1024),
-        "gmsfix.apk":        download(GMSFIX_URL, CACHE_HOME / "shopee-gmsfix.apk", 5 * 1024),
-        "emu-mask.zip":      download(EMUMASK_URL, CACHE_HOME / "shopee-emu-mask.zip", 500),
+        "Magisk.apk":         download(MAGISK_URL, CACHE_HOME / "Magisk.apk", 5 * 1024 * 1024),
+        "LSPosed.zip":        download(VECTOR_URL, CACHE_HOME / "LSPosed.zip", 2 * 1024 * 1024),
+        "modmenu.apk":        download(MODMENU_URL, CACHE_HOME / "shopee-modmenu.apk", 50 * 1024),
+        "gmsfix.apk":         download(GMSFIX_URL, CACHE_HOME / "shopee-gmsfix.apk", 5 * 1024),
+        "emu-mask.zip":       download(EMUMASK_URL, CACHE_HOME / "shopee-emu-mask.zip", 500),
         "shopee-patched.apk": download(SHOPEE_APK_URL, CACHE_HOME / "shopee-patched.apk", 50 * 1024 * 1024),
     }
 
-    # Boot emulator
-    log("starting emulator...")
-    start_emulator()
-    dev = wait_boot()
+    for apk_key in ("Magisk.apk", "shopee-patched.apk", "modmenu.apk", "gmsfix.apk"):
+        log(f"adb install {apk_key}")
+        adb(["-s", dev, "install", "-r", str(files[apk_key])], check=False, timeout=180)
 
-    time.sleep(10)  # biar system services settle
+    if is_rooted(dev):
+        for zip_key in ("LSPosed.zip", "emu-mask.zip"):
+            adb(["-s", dev, "push", str(files[zip_key]), f"/data/local/tmp/{zip_key}"], check=False)
+            adb(["-s", dev, "shell", "su", "-c",
+                 f"magisk --install-module /data/local/tmp/{zip_key}"], check=False, timeout=60)
+            ok(f"magisk module installed: {zip_key}")
+    else:
+        warn("device belum rooted — skip LSPosed + emu-mask install (butuh root).")
+        warn("Buka Magisk app di device → Install → patch boot image. Atau menu 3 (patch AVD).")
 
-    # Install Magisk Manager APK (biar user bisa manage via GUI nanti)
-    adb(["-s", dev, "install", "-r", str(files["Magisk.apk"])])
-
-    # Install Shopee patched
-    adb(["-s", dev, "install", "-r", str(files["shopee-patched.apk"])])
-
-    # Install modmenu + gmsfix
-    adb(["-s", dev, "install", "-r", str(files["modmenu.apk"])])
-    adb(["-s", dev, "install", "-r", str(files["gmsfix.apk"])])
-
-    # Push LSPosed + emu-mask ke tmp, install via Magisk CLI
-    for name, local in [("LSPosed.zip", files["LSPosed.zip"]),
-                         ("emu-mask.zip", files["emu-mask.zip"])]:
-        adb(["-s", dev, "push", str(local), f"/data/local/tmp/{name}"])
-        adb(["-s", dev, "shell", "su", "-c",
-             f"magisk --install-module /data/local/tmp/{name}"], check=False)
-
-    log("stack installed. Rebooting emulator...")
-    adb(["-s", dev, "reboot"])
-    time.sleep(5)
-    dev = wait_boot()
-
+    ok("stack install done")
     mark("apps_installed")
-    log("All apps installed + modules enabled")
 
-# ---- Phase 5: Launch + verify ----
-
-def phase_launch() -> None:
-    log("=== PHASE 5: Launch Shopee + verify ===", prefix=">")
-    dev = None
-    r = adb(["devices"], check=False)
-    for line in r.stdout.splitlines():
-        if "emulator" in line and line.endswith("\tdevice"):
-            dev = line.split("\t")[0]
-            break
+def flow_install_microg(dev: str = None) -> None:
+    section("Install microG stack (FakeStore + GmsCore + GsfProxy)")
     if not dev:
-        die("no emulator running — jalankan phase_apps dulu")
+        dev = pick_device()
+    log(f"target device: {dev}")
 
+    files = {}
+    for name, url in MICROG_URLS.items():
+        files[name] = download(url, CACHE_HOME / name, 50 * 1024)
+
+    # Uninstall real Play Store biar FakeStore menang signature
+    log("uninstall real Play Store (biar FakeStore menang signature)")
+    adb(["-s", dev, "uninstall", "com.android.vending"], check=False)
+
+    # Install order: FakeStore -> GmsCore -> GsfProxy
+    for name in ("FakeStore.apk", "GmsCore.apk", "GsfProxy.apk"):
+        adb(["-s", dev, "install", "-r", str(files[name])], check=False, timeout=120)
+
+    for perm in ("android.permission.FAKE_PACKAGE_SIGNATURE",
+                 "android.permission.ACCESS_FINE_LOCATION",
+                 "android.permission.READ_PHONE_STATE",
+                 "android.permission.GET_ACCOUNTS"):
+        adb(["-s", dev, "shell", "pm", "grant", "com.google.android.gms", perm], check=False)
+
+    ok("microG installed")
+    warn("Buka 'microG Settings' app → Self-Check (semua harus hijau)")
+    warn("'Google Account' → login akun → 'Cloud Messaging' ON → reboot")
+
+def flow_shopee_only(dev: str = None) -> None:
+    section("Install cuma Shopee + modmenu + gmsfix (skip LSPosed/emu-mask)")
+    if not dev:
+        dev = pick_device()
+    log(f"target device: {dev}")
+    shopee = download(SHOPEE_APK_URL, CACHE_HOME / "shopee-patched.apk", 50 * 1024 * 1024)
+    modmenu = download(MODMENU_URL, CACHE_HOME / "shopee-modmenu.apk", 50 * 1024)
+    gmsfix = download(GMSFIX_URL, CACHE_HOME / "shopee-gmsfix.apk", 5 * 1024)
+    for apk in (shopee, modmenu, gmsfix):
+        adb(["-s", dev, "install", "-r", str(apk)], check=False, timeout=180)
+    ok("Shopee + modmenu + gmsfix installed")
+
+def flow_verify(dev: str = None) -> None:
+    section("Verify current state")
+    if not dev:
+        dev = pick_device()
+
+    # Device info
+    model = adb(["-s", dev, "shell", "getprop", "ro.product.model"], check=False).stdout.strip()
+    sdk = adb(["-s", dev, "shell", "getprop", "ro.build.version.sdk"], check=False).stdout.strip()
+    hw = adb(["-s", dev, "shell", "getprop", "ro.hardware"], check=False).stdout.strip()
+    qemu = adb(["-s", dev, "shell", "getprop", "ro.kernel.qemu"], check=False).stdout.strip()
+    print(f"  Device: {dev}  Model: {model}  SDK: {sdk}")
+    print(f"  ro.hardware: {hw}  ro.kernel.qemu: {qemu}")
+
+    # Root
+    rooted = is_rooted(dev)
+    print(f"  Rooted (Magisk): {'✓' if rooted else '✗'}")
+
+    # Shopee + modmenu installed?
+    pkgs = adb(["-s", dev, "shell", "pm", "list", "packages"], check=False).stdout
+    for p, label in [
+        ("com.shopee.id", "Shopee"),
+        ("com.shopee.lite.id", "Shopee Lite"),
+        ("id.reverser.modmenu", "modmenu"),
+        ("id.reverser.shopee.gmsfix", "gmsfix"),
+        ("com.topjohnwu.magisk", "Magisk Manager"),
+        ("com.google.android.gms", "GMS/microG"),
+    ]:
+        installed = p in pkgs
+        print(f"  {label} ({p}): {'✓' if installed else '✗'}")
+
+    # Emu mask active?
+    if rooted:
+        mask = adb(["-s", dev, "shell", "su", "-c", "mount | grep /proc/cpuinfo"], check=False)
+        print(f"  /proc/cpuinfo bind-mount: {'✓' if 'cpuinfo' in mask.stdout else '✗'}")
+
+    # Modmenu hook trace
+    if rooted:
+        trace = adb(["-s", dev, "shell", "su", "-c",
+                     "/data/adb/lspd/cli log cat 2>&1 | grep ShopeeMod | tail -5"],
+                    check=False, timeout=15)
+        if trace.stdout.strip():
+            print(c("  Hook trace (last 5 lines):", "g"))
+            for line in trace.stdout.strip().splitlines():
+                print(f"    {line}")
+        else:
+            warn("Hook trace kosong — modmenu belum attach ke Shopee (atau Shopee belum buka)")
+
+def flow_launch(dev: str = None) -> None:
+    section("Launch Shopee + screenshot")
+    if not dev:
+        dev = pick_device()
+    adb(["-s", dev, "shell", "am", "force-stop", "com.shopee.id"], check=False)
     adb(["-s", dev, "shell", "monkey", "-p", "com.shopee.id",
          "-c", "android.intent.category.LAUNCHER", "1"], check=False)
-    time.sleep(10)
-    log("Shopee launched. Buka emulator window, tap mod menu ball di kiri atas.")
-    log("Login via OTP/password/Google (dengan gmsfix enabled).")
+    log("waiting 15s untuk Shopee ready...")
+    time.sleep(15)
+    CACHE_HOME.mkdir(parents=True, exist_ok=True)
+    out = CACHE_HOME / f"shopee-launch-{int(time.time())}.png"
+    r = subprocess.run([str(adb_bin()), "-s", dev, "exec-out", "screencap", "-p"],
+                       capture_output=True, timeout=30)
+    out.write_bytes(r.stdout)
+    ok(f"screenshot: {out}")
+
+def flow_reset() -> None:
+    section("Reset state checkpoint")
+    if STATE_FILE.exists():
+        STATE_FILE.unlink()
+        ok(f"deleted {STATE_FILE}")
+    else:
+        warn("state file tidak ada, nothing to reset")
+
+# ---- Menu ----
+
+MENU = [
+    ("Setup emulator baru from scratch (SDK + AVD + Magisk + stack)", "full-fresh",
+     "~15 min, ~3 GB download. Buat yg belum punya Android Studio / SDK."),
+    ("Install stack ke emulator existing yang sudah rooted Magisk", "install-stack",
+     "~3 min. Skip SDK/AVD/Magisk, install cuma apps + modules."),
+    ("Patch Magisk ke AVD existing (SDK + AVD sudah ada)", "patch-magisk",
+     "~2 min. Rooting-nya aja; apps install via menu 2."),
+    ("Install cuma Shopee + modmenu + gmsfix (skip LSPosed/emu-mask)", "shopee-only",
+     "~1 min. Buat yg sudah punya LSPosed/Vector sendiri."),
+    ("Install microG stack (emu non-GApps / login Google alt)", "microg",
+     "~2 min. Butuh signature spoofing di-enable duluan."),
+    ("Verify current state (device, root, modules, hook trace)", "verify",
+     "Diagnostic — check semua terpasang + jalan."),
+    ("Launch Shopee + grab screenshot", "launch",
+     "Smoke test akhir."),
+    ("Reset state checkpoint (buat rerun semua fresh)", "reset",
+     "Hapus state.json aja; cache file + SDK tetap."),
+]
+
+PRESETS = {name: idx for idx, (_, name, _) in enumerate(MENU)}
+
+def run_preset(preset: str) -> None:
+    if preset not in PRESETS:
+        die(f"preset tidak dikenal: {preset}. Valid: {', '.join(PRESETS)}")
+    idx = PRESETS[preset]
+    dispatch(idx)
+
+def dispatch(idx: int) -> None:
+    if idx == 0:
+        flow_sdk(); flow_avd(); flow_magisk_patch()
+        start_emulator()
+        flow_install_stack()
+    elif idx == 1:
+        flow_install_stack()
+    elif idx == 2:
+        flow_magisk_patch()
+        start_emulator()
+    elif idx == 3:
+        flow_shopee_only()
+    elif idx == 4:
+        flow_install_microg()
+    elif idx == 5:
+        flow_verify()
+    elif idx == 6:
+        flow_launch()
+    elif idx == 7:
+        flow_reset()
+
+def print_menu() -> None:
+    print()
+    print(c("┌─────────────────────────────────────────────────────────────────┐", "b"))
+    print(c("│  Shopee Emulator Setup — reverser.id                            │", "bld"))
+    print(c("├─────────────────────────────────────────────────────────────────┤", "b"))
+    for i, (title, _, desc) in enumerate(MENU, 1):
+        print(c(f"│  {i}. {title[:60]:60}│", "cy"))
+        print(c(f"│     {desc[:60]:60}│", "w"))
+    print(c("│  0. Exit                                                        │", "r"))
+    print(c("└─────────────────────────────────────────────────────────────────┘", "b"))
+    print()
+    print(c(f"  State: ", "w") + c(str(STATE_FILE), "y"))
+    print(c(f"  SDK:   ", "w") + c(str(SDK_HOME), "y"))
+    print(c(f"  Cache: ", "w") + c(str(CACHE_HOME), "y"))
+    st = load_state()
+    if st:
+        done_items = [k for k, v in st.items() if v]
+        print(c("  Done:  ", "w") + c(", ".join(done_items), "g"))
+    print()
+
+def interactive_loop() -> None:
+    while True:
+        print_menu()
+        ans = input(c("Pilih (0-8): ", "y")).strip()
+        if ans == "0":
+            print("bye.")
+            return
+        try:
+            idx = int(ans) - 1
+            if not 0 <= idx < len(MENU):
+                raise ValueError
+        except ValueError:
+            print(c("input invalid, coba lagi", "r"))
+            continue
+        try:
+            dispatch(idx)
+        except KeyboardInterrupt:
+            print(c("\ninterrupted — kembali ke menu", "y"))
+        except SystemExit:
+            raise
+        except Exception as e:
+            print(c(f"error: {e}", "r"))
+        input(c("\nTekan Enter untuk balik ke menu...", "cy"))
 
 # ---- Main ----
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--phase", choices=["sdk", "avd", "magisk", "apps", "launch", "all"], default="all")
-    ap.add_argument("--skip-sdk", action="store_true")
-    ap.add_argument("--skip-avd", action="store_true")
-    ap.add_argument("--skip-magisk", action="store_true")
-    ap.add_argument("--reset", action="store_true", help="hapus semua state checkpoint")
+    ap.add_argument("--preset", choices=list(PRESETS.keys()),
+                    help="run spesifik flow tanpa menu interaktif")
     args = ap.parse_args()
 
-    if args.reset:
-        if STATE_FILE.exists():
-            STATE_FILE.unlink()
-        log("state reset — next run akan rerun semua phase")
-        return
+    print(c("Shopee Emulator Setup — reverser.id", "bld"))
+    print(c(f"OS: {OS} ({platform.machine()})  Python: {platform.python_version()}", "cy"))
 
-    log(f"OS: {OS} ({platform.machine()})")
-    log(f"Python: {platform.python_version()}")
-    log(f"SDK:   {SDK_HOME}")
-    log(f"Cache: {CACHE_HOME}")
-    log("")
-
-    if args.phase == "all":
-        if not args.skip_sdk:    phase_sdk()
-        if not args.skip_avd:    phase_avd()
-        if not args.skip_magisk: phase_magisk()
-        phase_apps()
-        phase_launch()
-    elif args.phase == "sdk":
-        phase_sdk()
-    elif args.phase == "avd":
-        phase_avd()
-    elif args.phase == "magisk":
-        phase_magisk()
-    elif args.phase == "apps":
-        phase_apps()
-    elif args.phase == "launch":
-        phase_launch()
-
-    log("")
-    log("DONE 🎉", prefix=">")
-    log("Buka emulator window → mod menu ball (kiri atas) → semua toggle ready")
-    log("Shopee login (OTP / email / Google via gmsfix) → test shopping")
+    if args.preset:
+        run_preset(args.preset)
+    else:
+        interactive_loop()
 
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
+        print()
         die("interrupted")
