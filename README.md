@@ -1,4 +1,19 @@
 # Shopee — Patched
+> **🚀 v1.8.0 (2026-11-07)** — Auto-Setup GUI + microG Google Sign-In Unlock:
+>
+> - **GUI single-exe** (PyQt6, dark reverser.id theme): [`scripts/ShopeeBypass.exe`](scripts/ShopeeBypass.exe) (48 MB, no Python needed)
+>   - Auto-detect LDPlayer9 instances via `vms/config/leidian*.config`
+>   - 10-step auto-chain: wait boot → root → install Magisk → push frida → emu-mask → spoof props → install Shopee → grant 10+ perms → launch → Frida GMS cert fix
+>   - ldconsole CLI integration: `set_root_mode`, `set_writable_disk`, `patch_config`, `install_apk`, `ld_setprop`
+> - **microG Google Sign-In unlock** — 4 smali patches force Google button + APPAUTH browser flow (bypass GMS IPC): [`docs/microg/GOOGLE-SIGNIN-UNLOCK.md`](docs/microg/GOOGLE-SIGNIN-UNLOCK.md)
+>   - `GoogleSignatureVerifier`: accept microG cert (4 methods return true)
+>   - `connect3rd.b.d()`: force show Google button
+>   - `helper.c0.a()`: GMS available = true
+>   - `GoogleSignInClient.zba()`: APPAUTH flow (bypass GMS binding)
+> - **Frida GMS cert spoof v3** — real Shopee cert embedded ([`patches/frida_gms_fix.js`](patches/frida_gms_fix.js) + [`patches/stock_cert_java.txt`](patches/stock_cert_java.txt))
+> - **unidbg-sign SPSSDK signer** — Java/unidbg emulator passes WAF signature: [`docs/_SIGNER.md`](docs/_SIGNER.md)
+> - **Coin claim automation** (WIP, blocked on `report_token` encryption): [`scripts/claim_auto.py`](scripts/claim_auto.py)
+>
 > **🔥 v1.7.2 (2025-11-03)** — Mod menu stability patch:
 >
 > - **Fix "undefined" toast + Beli Sekarang gak jalan** — `hookWebViewTraffic` lama nge-block captcha page Shopee ("/verify/traffic/error" untuk risk-flagged sessions) → infinite loop + JS error. Sekarang captcha render normal, user solve puzzle, lanjut checkout. [`modules/shopee-modmenu-1.7.2.apk`](https://github.com/ReverserID/shopee-lite-patched/raw/main/modules/shopee-modmenu-1.7.2.apk)
